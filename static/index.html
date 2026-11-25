@@ -140,6 +140,28 @@ main:has(#typed)>.card{max-width:780px;margin:auto;border-top:4px solid var(--ac
 @media(max-width:899px){nav button{gap:6px}.deck-art{transform:scale(.8);margin-right:0}.top{padding-bottom:8px}nav button svg{width:15px}}
 @media(max-width:620px){#topics{grid-template-columns:1fr}.deck-art{display:none}.session-hero{margin-bottom:20px}.tools{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}.round-label{margin-bottom:8px}nav button svg{display:none}.topic{padding:13px}.page-heading{margin-top:15px}}
 .extras{margin:0 0 22px;padding:10px 0 14px;border-top:0;border-bottom:1px solid var(--line)}
+
+.mode-switch{display:inline-flex;gap:3px;padding:4px;background:var(--line);border-radius:13px;margin:8px 0 13px}
+.mode-switch button{background:transparent;border:0;border-radius:9px;padding:9px 13px;color:var(--mut);font:600 14px system-ui;cursor:pointer}
+.mode-switch button[aria-pressed=true]{background:var(--card);color:var(--acc);box-shadow:0 1px 4px #0002}
+.study .flip-face{width:100%;display:grid;grid-template-rows:auto 1fr auto;gap:22px;min-height:290px;text-align:center;color:var(--fg);font:inherit;cursor:pointer;border-top:4px solid var(--acc)}
+.face-label,.turn-hint,.write-face small{font-size:13px;color:var(--mut)}
+.face-text{align-self:center;font-weight:650;font-size:clamp(20px,3vw,29px);white-space:pre-wrap;overflow-wrap:anywhere}
+#study-answer.flip-face .face-text{font-size:clamp(17px,2vw,22px);font-weight:500}
+@media(prefers-reduced-motion:no-preference){.flip-face{animation:turn-face .18s ease-out}@keyframes turn-face{from{transform:perspective(800px) rotateX(-8deg);opacity:.7}to{transform:none;opacity:1}}}
+.write-face{display:grid;gap:12px}.write-face .btn{justify-self:start}.write-question{font-size:clamp(19px,2.5vw,26px);font-weight:650;margin:0 0 8px}.write-face h3,.compare p{margin:0}
+.compare{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr))}.compare>div{padding:14px;background:var(--bg);border-radius:10px}.compare b{display:block;margin-bottom:6px;font-size:13px;color:var(--mut)}.compare p{white-space:pre-wrap}
+.answer-prose{display:block;white-space:pre-wrap;line-height:1.55}.answer-equation{display:block;margin-top:12px;padding:12px 4px;text-align:center;font-size:1.15em;line-height:1.8;overflow-x:auto;max-width:100%}
+.flip-face .face-text{min-width:0;max-width:100%}#study-answer.flip-face .answer-prose{text-align:start;max-width:56ch;margin:auto}#study-answer.flip-face .answer-equation{font-size:clamp(22px,3vw,30px);border-top:1px solid var(--line)}
+
+/* phone: tabs as a bottom bar so all six are visible without sideways scrolling */
+@media(max-width:620px){
+ header{backdrop-filter:none;-webkit-backdrop-filter:none}
+ nav{position:fixed;left:0;right:0;bottom:0;z-index:20;margin:0;max-width:none;display:grid;grid-template-columns:repeat(8,1fr);gap:0;padding:4px 1px calc(4px + env(safe-area-inset-bottom));background:var(--card);border-top:1px solid var(--line);overflow:visible}
+ nav button{flex-direction:column;justify-content:center;gap:2px;padding:6px 0;font-size:9.5px;letter-spacing:-.2px;overflow:hidden;border-radius:10px;min-width:0;white-space:nowrap}
+ nav button svg{width:20px;height:20px}
+ main{padding-bottom:84px}
+}
 </style>
 </head>
 <body>
@@ -149,10 +171,12 @@ main:has(#typed)>.card{max-width:780px;margin:auto;border-top:4px solid var(--ac
 </header>
 <h2 class="page-heading" id="section-title"></h2>
 <main id="main"></main>
+<script src="/static/exam.js"></script>
 <script>
-const TABS=[["practice","Практика"],["today","Сьогодні"],["subjects","Предмети"],["items","Борги"],["cards","Картки"],["materials","Матеріали"]];
+const TABS=[["practice","Практика"],["exam","Іспит"],["today","Сьогодні"],["subjects","Предмети"],["items","Борги"],["record","Облік"],["cards","Картки"],["materials","Матеріали"]];
 const ST={todo:"не зроблено",ready:"готово",submitted:"здано"},NEXT={todo:"ready",ready:"submitted",submitted:"todo"};
 let S=null,tab="practice",deck=[],cur=0,shown=false,deckSubj="",fSubj="",fStat="open";
+let reviewEvent=null;
 let studyPhase="idle",savingReview=false,studyError="",firstPass=0,known=0;
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const api=(p,o={})=>fetch(p,{headers:{"Content-Type":"application/json"},...o,body:o.body?JSON.stringify(o.body):undefined}).then(r=>r.json());
@@ -161,14 +185,14 @@ const subj=k=>S.subjects.find(s=>s.key===k)||{name:k,color:"#888"};
 const days=d=>Math.ceil((new Date(d)-new Date(S.today))/864e5);
 const fileLink=f=>f?`<a href="/files/${encodeURI(f)}" target="_blank">файл</a>`:"";
 const formPill=f=>`<span class="pill ${f==="Е"?"e":f==="ЗД"?"zd":""}">${f==="Е"?"екзамен":f==="ЗД"?"диф. залік":"залік"}</span>`;
-async function load(){S=await api("/api/state");render();openStudy()}
+async function load(){try{const state=await api("/api/state");if(!state.meta)throw Error();S=state;render();openStudy()}catch{$("#main").innerHTML='<div class="card" role="alert">Не вдалося завантажити дані. <button class="btn" onclick="load()">Спробувати знову</button></div>'}}
 function setTab(t){tab=t;try{localStorage.setItem("tab",t)}catch(e){}render();openStudy()}
 function render(){
   $("#section-title").textContent=TABS.find(([key])=>key===tab)?.[1]||"";
   const d=days(S.meta.session_start);
   $("#cd").textContent=d>0?`до сесії ${d} дн. (${S.meta.session_start.split("-").reverse().join(".")})`:"сесія триває";
   $("#nav").innerHTML=TABS.map(([k,v])=>`<button class="${k===tab?"on":""}" onclick="setTab('${k}')" aria-current="${k===tab?"page":"false"}">${navIcon(k)}${v}</button>`).join("");
-  ({today,subjects,items,cards,materials,practice})[tab]();
+  ({today,subjects,items,cards,materials,practice,exam:examTab,record:recordTab})[tab]();
   if(tab!=="cards")renderMath($("#main"));
 }
 function renderMath(element){
@@ -181,14 +205,14 @@ function today(){
   const fresh=S.items.filter(i=>i.subject==="new"&&i.status==="todo"),open=S.items.filter(i=>i.status==="todo"&&i.subject!=="new"),due=Object.values(S.cardStats).reduce((a,b)=>a+(b.due||0),0);
   const ready=S.items.filter(i=>i.status==="ready").length;
   const sync=S.meta.last_sync?`<div class="mut" style="margin-top:6px">останнє оновлення даних: ${esc(S.meta.last_sync)}</div>`:"";
-  const exams=S.subjects.filter(s=>s.exam_date).sort((a,b)=>a.exam_date.localeCompare(b.exam_date));
+  const exams=S.subjects.filter(s=>s.exam_date && s.exam_date>=S.today).sort((a,b)=>a.exam_date.localeCompare(b.exam_date));
   const rv=S.reviews[0]&&S.reviews[0].d===S.today?S.reviews[0]:{n:0,ok:0};
   $("#main").innerHTML=`
   <div class="grid overview">
     <div class="card"><div class="mut">Борги (не зроблено)</div><div class="big">${open.length}</div><div class="mut">ще ${ready} готові, але не здані</div></div>
     <div class="card"><div class="mut">Картки на сьогодні</div><div class="big">${due}</div><div class="mut">повторено сьогодні: ${rv.n} (${rv.ok||0} правильно)</div>
       ${due?`<button class="btn" style="margin-top:8px" onclick="startDeck('')">Почати повторення</button>`:""}</div>
-    <div class="card"><div class="mut">Найближчі екзамени</div>${exams.length?exams.slice(0,3).map(s=>`<div><b>${esc(s.name)}</b> — ${s.exam_date.split("-").reverse().join(".")} (${days(s.exam_date)} дн.)</div>`).join(""):`<div class="mut">дати ще не внесені — додай у «Предмети»</div>`}${sync}</div>
+    <div class="card"><div class="mut">Найближчі екзамени</div>${exams.length?exams.slice(0,3).map(s=>`<div><b>${esc(s.name)}</b> — ${s.exam_date.split("-").reverse().join(".")} (${days(s.exam_date)} дн.)</div>`).join(""):`<div class="mut">Немає запланованих дат. Додати дату можна у «Предмети».</div>`}${sync}</div>
   </div>
   <div class="card"><h2>Що зробити</h2>${open.length?open.map(itemRow).join(""):`<div class="mut">Усе зроблено 🎉</div>`}</div>
   ${fresh.length?`<div class="card"><h2>Вхідні завдання (${fresh.length})</h2><div class="mut">Перевір: перенеси в предмет (✎) або видали.</div>${fresh.map(itemRow).join("")}</div>`:""}
@@ -238,12 +262,51 @@ async function startDeck(k){
   try{
     const result=await api(`/api/cards/due?subject=${encodeURIComponent(k)}&limit=30`);
     if(!Array.isArray(result))throw new Error("Invalid deck");
-    deck=result;firstPass=deck.length;cur=0;known=0;shown=false;studyPhase="ready";
+    reviewEvent=null;writtenDraft="";deck=result;firstPass=deck.length;cur=0;known=0;shown=false;studyPhase="ready";
   }catch{
     studyPhase="error";
   }
-  updateStudy("#study-reveal");
+  updateStudy("#written-answer, #study-reveal");
 }
+let studyMode="flip", writtenDraft="";
+try{if(localStorage.getItem("study-mode")==="write")studyMode="write"}catch{}
+function setStudyMode(mode){
+  if(savingReview||mode===studyMode)return;
+  studyMode=mode;shown=false;studyError="";
+  try{localStorage.setItem("study-mode",mode)}catch{}
+  updateStudy(mode==="write"?"#written-answer":"#study-reveal");
+}
+function flipStudy(){
+  if(savingReview||studyPhase!=="ready"||!deck[cur])return;
+  shown=!shown;studyError="";
+  updateStudy(shown?"#study-answer":"#study-reveal");
+}
+function checkWritten(){
+  if(!writtenDraft.trim()||shown||savingReview)return;
+  shown=true;updateStudy("#study-answer");
+}
+function normalizedAnswer(text){
+  return String(text).normalize("NFC").trim().replace(/\s+/gu," ");
+}
+function modernExercise(card){
+  return card.subject!=="nsp"||!!card.q_view;
+}
+function cardExercise(card,busy){
+  const q=fmt(questionText(card)),disabled=busy?"disabled":"";
+  const grade='<div class="actions"><button class="btn bad" onclick="answer(false)" '+disabled+'>Повторити</button><button class="btn ok" onclick="answer(true)" '+disabled+'>Зарахувати</button></div>';
+  const tabs='<div class="mode-switch" role="group" aria-label="Спосіб повторення">'+
+    [["flip","Перевертати"],["write","Писати відповідь"]].map(([key,label])=>'<button aria-pressed="'+(studyMode===key)+'" onclick="setStudyMode(\''+key+'\')" '+disabled+'>'+label+'</button>').join("")+'</div>';
+  if(studyMode==="flip"){
+    return tabs+'<button type="button" id="'+(shown?'study-answer':'study-reveal')+'" class="card flip-face" onclick="flipStudy()" '+disabled+'><span class="face-label">'+(shown?'Відповідь':'Питання')+'</span><span class="face-text">'+(shown?answerMarkup(card):q)+'</span><span class="turn-hint">↻ '+(shown?'Повернутися до питання':'Перевернути картку')+'</span></button>'+(shown?grade:'');
+  }
+  if(!shown){
+    return tabs+'<form class="card write-face" onsubmit="event.preventDefault();checkWritten()"><p class="write-question">'+q+'</p><label for="written-answer">Твоя відповідь</label><textarea id="written-answer" required placeholder="Введи відповідь…" oninput="writtenDraft=this.value" onkeydown="if(event.key===\'Enter\' && !event.shiftKey && !event.isComposing){event.preventDefault();checkWritten()}">'+esc(writtenDraft)+'</textarea><button class="btn" type="submit">Перевірити</button><small>Enter — перевірити · Shift + Enter — новий рядок</small></form>';
+  }
+  const match=matchesSample(card,writtenDraft);
+  return tabs+'<section class="card write-face" id="study-answer" tabindex="-1"><p class="write-question">'+q+'</p><h3>'+(match?'Відповідь збігається':'Порівняй відповіді')+'</h3><div class="compare"><div><b>Твоя відповідь</b><p>'+esc(writtenDraft)+'</p></div><div><b>Зразок</b><p>'+answerMarkup(card)+'</p></div></div></section>'+
+    (match?'<div class="actions"><button class="btn ok" onclick="answer(true)" '+disabled+'>Зарахувати й далі →</button></div>':grade);
+}
+
 function cards(){
   $("#main").innerHTML=`<div class="study"><div id="study-panel"></div>
     <details class="card" style="margin-top:20px"><summary>Додати картки</summary>
@@ -274,14 +337,14 @@ function updateStudy(focus){
   }else{
     const c=deck[cur],s=subj(c.subject),repeating=cur>=firstPass;
     const position=repeating?cur-firstPass:cur, total=repeating?deck.length-firstPass:firstPass;
-    const question=`<span>${fmt(c.q)}</span>`;
+    const question=`<span>${fmt(questionText(c))}</span>`;
     body=`<div class="mut">${repeating?"Повтор помилок":"Картка"} ${position+1} із ${total} · ${esc(s.name)}</div>
       <progress value="${position}" max="${total}" aria-label="Прогрес підходу"></progress>
-      ${shown?`<div class="card flash" id="study-answer" tabindex="-1">${question}<div class="a">${fmt(c.a)}</div></div>
+      ${modernExercise(c)?cardExercise(c,busy):(shown?`<div class="card flash" id="study-answer" tabindex="-1">${question}<div class="a">${answerMarkup(c)}</div></div>
         <div class="actions"><button class="btn bad" onclick="answer(false)" ${busy?"disabled":""}>Не знав</button>
         <button class="btn ok" onclick="answer(true)" ${busy?"disabled":""}>Знав</button></div>
         <p class="mut keys">1 або ← — не знав · 2 або → — знав</p>`:
-        `<button class="card flash" id="study-reveal" onclick="revealCard()">${question}<span class="mut" style="margin-top:12px">Показати відповідь · Пробіл</span></button>`}
+        `<button class="card flash" id="study-reveal" onclick="revealCard()">${question}<span class="mut" style="margin-top:12px">Показати відповідь · Пробіл</span></button>`)}
       ${studyError?`<p role="alert">${studyError}</p>`:""}`;
   }
   panel.innerHTML=head+body;
@@ -298,13 +361,15 @@ async function answer(ok){
   savingReview=true;studyError="";updateStudy("#study-answer");
   try{
     const c=deck[cur];
-    const result=await api(`/api/cards/${c.id}/review`,{method:"POST",body:{ok}});
+    reviewEvent??={event:Date.now().toString(36)+"-"+Math.random().toString(36).slice(2),ok};
+    ok=reviewEvent.ok;
+    const result=await api(`/api/cards/${c.id}/review`,{method:"POST",body:reviewEvent});
     if(!Number.isInteger(result?.box))throw new Error("Review failed");
     if(cur<firstPass){
       if(ok)known++;
       else deck.push(c);
     }
-    cur++;shown=false;
+    reviewEvent=null;cur++;writtenDraft="";shown=false;
     try{
       const state=await api("/api/state");
       if(state.cardStats)S=state;
@@ -312,7 +377,7 @@ async function answer(ok){
   }catch{
     studyError="Не вдалося зберегти відповідь. Спробуй ще раз.";
   }finally{
-    savingReview=false;updateStudy(shown?"#study-answer":"#study-reveal, #study-end");
+    savingReview=false;updateStudy(shown?"#study-answer":"#written-answer, #study-reveal, #study-end");
   }
 }
 async function importCards(){
@@ -347,15 +412,17 @@ document.addEventListener("keydown",function(e){
   if(tab!=="cards"||studyPhase!=="ready"||!deck[cur]||savingReview||e.defaultPrevented||
      e.repeat||e.isComposing||e.ctrlKey||e.altKey||e.metaKey||
      e.target.closest("input,textarea,select,[contenteditable]"))return;
-  if(e.key===" "&&!shown&&!e.target.closest("button,summary,a")){
-    e.preventDefault();revealCard();
+  if(e.key===" "&&!e.target.closest("button,summary,a")){
+    if(modernExercise(deck[cur])){
+      if(studyMode==="flip"){e.preventDefault();flipStudy()}
+    }else if(!shown){e.preventDefault();revealCard()}
   }else if(shown&&["1","2","ArrowLeft","ArrowRight"].includes(e.key)){
     e.preventDefault();answer(e.key==="2"||e.key==="ArrowRight");
   }
 });
 const symbols={math:"∑",phys:"λ",chem:"◈",info:"{ }",eng:"Aa",hist:"§",nsp:"◎"};
 let catalogGroups=[],searchText="",roundSize=10;
-const icons={practice:"M5 3l15 9-15 9z",today:"M4 6h16v15H4z M4 10h16 M8 3v5 M16 3v5",subjects:"M3 5q5-2 9 1 4-3 9-1v14q-5-2-9 1-5-3-9-1z M12 6v14",items:"M3 6l2 2 4-5 M11 6h10 M3 15l2 2 4-5 M11 15h10",cards:"M3 8h15v12H3z M7 4h15v12",materials:"M3 6h7l2 3h9v11H3z"};
+const icons={exam:"M6 3h9l4 4v14H6z M15 3v4h4 M9 12h7 M9 16h5",record:"M4 20V10 M10 20V4 M16 20v-7 M22 20H2",practice:"M5 3l15 9-15 9z",today:"M4 6h16v15H4z M4 10h16 M8 3v5 M16 3v5",subjects:"M3 5q5-2 9 1 4-3 9-1v14q-5-2-9 1-5-3-9-1z M12 6v14",items:"M3 6l2 2 4-5 M11 6h10 M3 15l2 2 4-5 M11 15h10",cards:"M3 8h15v12H3z M7 4h15v12",materials:"M3 6h7l2 3h9v11H3z"};
 function navIcon(k){return '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="'+icons[k]+'"/></svg>'}
 function subjectName(k){return S.subjects.find(s=>s.key===k)?.name||k}
 function catalogue(){
@@ -388,7 +455,7 @@ function catalogue(){
 function listTopics(){
  const query=searchText.trim().toLocaleLowerCase("uk");
  const html=catalogGroups.map((g,i)=>{
-   if(query&&![subjectName(g.subject),g.name,...g.cards.map(c=>c.q)].some(s=>s.toLocaleLowerCase("uk").includes(query)))return "";
+   if(query&&![subjectName(g.subject),g.name,...g.cards.flatMap(c=>[c.q,questionText(c)])].some(s=>s.toLocaleLowerCase("uk").includes(query)))return "";
    const reviewed=g.cards.filter(c=>c.right||c.wrong).length;
    return `<button class="topic" onclick="startTopic(${i})"><span class="glyph g-${esc(g.subject)}" aria-hidden="true">${symbols[g.subject]||'•'}</span><span class="topic-text"><small>${esc(subjectName(g.subject))}</small><strong>${esc(g.name)}</strong><small>${g.cards.length} питань · переглянуто ${reviewed}</small></span><span class="open-arrow" aria-hidden="true">↗</span></button>`;
  }).join("");
@@ -396,6 +463,32 @@ function listTopics(){
 }
 function startTopic(i){const g=catalogGroups[i];selected=g.subject;topic=g.name;beginPractice("all")}
 
+// Nicer wording lives in the DB now (cards.q_view / a_view / f_view, shown while cards.a === src_a).
+const studyQuestions={};
+const studyAnswers={};
+function questionText(card){return card.q_view||card.q}
+function answerParts(card){
+  return card.a_view&&card.src_a===card.a?{text:card.a_view,formula:card.f_view||""}:{text:card.a,formula:""};
+}
+function answerText(card){
+  const {text,formula}=answerParts(card);
+  return formula?text+"\n"+formula:text;
+}
+function answerMarkup(card){
+  const {text,formula}=answerParts(card);
+  const math=formula.replace(/\$([^$]+)\$/g,(_,expression)=>"$\\displaystyle "+expression+"$");
+  return '<span class="answer-prose">'+fmt(text)+'</span>'+(formula?'<span class="answer-equation">'+fmt(math)+'</span>':'');
+}
+function matchesSample(card,draft){
+  const {text,formula}=answerParts(card);
+  const options=[text,formula,answerText(card)];
+  if(formula)options.push(formula.replace(/\$/g,""));
+  if(card.subject==="phys"&&card.q==="Гідродинаміка — Гідравлічний прес"&&card.a_view&&card.src_a===card.a){
+    options.push("Сила прямо пропорційна площі поршня","F1/S1=F2/S2","F1/F2=S1/S2","F₂/F₁=S₂/S₁","F₁/S₁=F₂/S₂");
+  }
+  const normalize=v=>normalizedAnswer(v).replace(/\s*([=/])\s*/g,"$1").replace(/(?<=[а-яіїєґa-z])\.$/iu,"");
+  return options.some(v=>v&&normalize(v)===normalize(draft));
+}
 const storePractice="session-practice-v1";
 let training=JSON.parse(localStorage.getItem(storePractice)||'{"notes":{},"groups":{},"images":{},"queue":[],"run":null}'),library=[],selected="",topic="",practiceLoading=false;
 function remember(){localStorage.setItem(storePractice,JSON.stringify(training))}
@@ -418,16 +511,16 @@ function drawPractice(){
  const main=$("#main"), r=training.run;
  if(r){
  const c=r.cards[r.i];
- if(!c||r.done){main.innerHTML='<div class="card"><h2>Розбір відповідей</h2><p>'+(!r.exam&&r.scores?'Згадано '+r.scores.filter(Boolean).length+' із '+r.i:'Відповідей записано: '+r.responses.filter(v=>v?.trim()).length+' із '+r.cards.length)+'</p>'+r.cards.map((c,i)=>'<p><b>'+esc(c.q)+'</b><br>Твоя відповідь: '+esc(r.responses[i]||'—')+'<br>Зразок: '+fmt(c.a)+'</p>').join('')+button("До тем","finishPractice()")+'</div>';renderMath(main);return}
+ if(!c||r.done){main.innerHTML='<div class="card"><h2>Розбір відповідей</h2><p>'+(!r.exam&&r.scores?'Згадано '+r.scores.filter(Boolean).length+' із '+r.i:'Відповідей записано: '+r.responses.filter(v=>v?.trim()).length+' із '+r.cards.length)+'</p>'+r.cards.map((c,i)=>'<p><b>'+esc(questionText(c))+'</b><br>Твоя відповідь: '+esc(r.responses[i]||'—')+'<br>Зразок: '+answerMarkup(c)+'</p>').join('')+button("До тем","finishPractice()")+'</div>';renderMath(main);return}
  const img=training.images[c.id];
- main.innerHTML='<div class="card"><div class="mut">'+(r.i+1)+' / '+r.cards.length+' <span id="clock"></span></div><progress aria-label="Прогрес" style="width:100%;accent-color:var(--acc)" value="'+r.i+'" max="'+r.cards.length+'"></progress><h2>'+fmt(c.q)+'</h2>'+(img?'<img alt="Схема до питання" style="max-width:100%;max-height:360px" src="'+esc(img)+'">':'')+'<label>Твоя відповідь<textarea id="typed" oninput="saveTyped(this.value)">'+esc(r.responses[r.i]||'')+'</textarea></label>'+
- (r.exam?button("Далі","advance(null)"):r.open?'<div class="card">'+fmt(c.a)+'</div>'+button("Знав","advance(true)")+button("Не знав","advance(false)"):button("Звірити відповідь","showPractice()"))+
+ main.innerHTML='<div class="card"><div class="mut">'+(r.i+1)+' / '+r.cards.length+' <span id="clock"></span></div><progress aria-label="Прогрес" style="width:100%;accent-color:var(--acc)" value="'+r.i+'" max="'+r.cards.length+'"></progress><h2>'+fmt(questionText(c))+'</h2>'+(img?'<img alt="Схема до питання" style="max-width:100%;max-height:360px" src="'+esc(img)+'">':'')+'<label>Твоя відповідь<textarea id="typed" oninput="saveTyped(this.value)">'+esc(r.responses[r.i]||'')+'</textarea></label>'+
+ (r.exam?button("Далі","advance(null)"):r.open?'<div class="card">'+answerMarkup(c)+'</div>'+button("Знав","advance(true)")+button("Не знав","advance(false)"):button("Звірити відповідь","showPractice()"))+
  '<details><summary>Дії з питанням</summary>'+button("Не розумію · додати конспект","markPractice()")+button("Редагувати","editPractice()")+button("Додати до білета","ticketPractice()")+'<label>Прикріпити схему <input type="file" accept="image/png,image/jpeg,image/webp" onchange="imagePractice(this)"></label></details>'+button("До каталогу","pausePractice()")+'</div>';renderMath(main);tickPractice();return}
  catalogue();
 }
 function beginPractice(mode){
  let list=chosen();
- if(mode==="weak"){const weak=new Set(list.filter(c=>c.wrong>0).map(theme));list=list.filter(c=>weak.has(theme(c))).sort((a,b)=>b.wrong-a.wrong)}
+ if(mode==="weak"){const group=c=>JSON.stringify([c.subject,theme(c)]);const weak=new Set(list.filter(c=>c.wrong>0).map(group));list=list.filter(c=>weak.has(group(c))).sort((a,b)=>b.wrong-a.wrong)}
  if(mode==="notes")list=list.filter(c=>Object.hasOwn(training.notes,c.id));
  if(mode==="ticket"){const groups=[...new Set(list.map(c=>training.groups[c.id]).filter(Boolean))];const g=groups[Math.floor(Math.random()*groups.length)];list=list.filter(c=>g&&training.groups[c.id]===g)}
  if(!list.length){$("#practice-msg").textContent=mode==="ticket"?"Додай питання до білета через «Дії з питанням».":"Для цього режиму поки немає карток.";return}
@@ -446,15 +539,66 @@ function resumePractice(){training.run=training.paused;training.paused=null;reme
 function currentCard(){return training.run.cards[training.run.i]}
 function markPractice(){const id=currentCard().id;const v=prompt("Посилання на конспект або примітка",training.notes[id]||"");if(v!==null){training.notes[id]=v;remember()}}
 function ticketPractice(){const id=currentCard().id;const v=prompt("Номер білета",training.groups[id]||"");if(v!==null){training.groups[id]=v.trim();remember()}}
-async function editPractice(){const c=currentCard(),q=prompt("Питання",c.q);if(!q?.trim())return;const a=prompt("Відповідь",c.a);if(!a?.trim())return;try{const result=await api('/api/cards/'+c.id,{method:'PATCH',body:{q,a}});if(!result.ok)throw Error();Object.assign(c,{q,a});Object.assign(library.find(x=>x.id===c.id)||{},{q,a});remember();drawPractice()}catch{alert("Для редагування потрібне з’єднання із сервером.")}}
+async function editPractice(){const c=currentCard(),q=prompt("Питання",questionText(c));if(!q?.trim())return;const a=prompt("Відповідь",answerText(c));if(!a?.trim())return;
+ const displayQuestion=questionText(c),displayAnswer=answerText(c);
+ if(q===displayQuestion&&a===displayAnswer)return;
+ const separator=c.q.includes(" — ")?" — ":(c.subject==="hist"&&c.q.includes(":")?": ":"");
+ const savedQ=q===displayQuestion?c.q:(separator&&!q.startsWith(theme(c)+separator)?theme(c)+separator+q:q);
+ const savedA=savedQ===c.q&&a===displayAnswer?c.a:a;
+ try{const result=await api('/api/cards/'+c.id,{method:'PATCH',body:{q:savedQ,a:savedA}});if(!result.ok)throw Error();const edited={q:savedQ,a:savedA,q_view:null,a_view:null,f_view:null};Object.assign(c,edited);Object.assign(library.find(x=>x.id===c.id)||{},edited);remember();drawPractice()}catch{alert("Для редагування потрібне з’єднання із сервером.")}}
 async function imagePractice(input){const f=input.files[0];if(!f||!["image/png","image/jpeg","image/webp"].includes(f.type))return;if(f.size>400000){alert("Обери зображення до 400 КБ.");return}const id=currentCard().id,reader=new FileReader();reader.onload=()=>{training.images[id]=reader.result;try{remember();drawPractice()}catch{delete training.images[id];alert("Пам’ять браузера заповнена.")}};reader.readAsDataURL(f)}
 function downloadFile(name,body,type){const u=URL.createObjectURL(new Blob([body],{type})),a=document.createElement("a");a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+function scriptJson(value){return JSON.stringify(value).replace(/</g,"\\u003c")}
+function offlineEquations(cards){
+  const equations={};
+  for(const c of cards){
+    for(const match of (questionText(c)+" "+answerText(c)).matchAll(/\$([^$]+)\$/g)){
+      const expr=match[1];
+      if(!Object.hasOwn(equations,expr)){
+        if(!window.katex)throw Error("math");
+        equations[expr]=katex.renderToString(expr,{output:"mathml",throwOnError:true});
+      }
+    }
+  }
+  return equations;
+}
+function drawOfflineMath(element,equations){
+  const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT),nodes=[];
+  while(walker.nextNode()){
+    const n=walker.currentNode;
+    if(n.nodeValue.includes("$")&&!n.parentElement.closest("math,annotation,code,textarea,script,style"))nodes.push(n);
+  }
+  for(const n of nodes){
+    const value=n.nodeValue,frag=document.createDocumentFragment();let offset=0;
+    for(const m of value.matchAll(/\$([^$]+)\$/g)){
+      const key=m[1].replace(/^\\displaystyle\s+/,"");
+      if(!Object.hasOwn(equations,key))continue;
+      const template=document.createElement("template");template.innerHTML=equations[key];
+      frag.append(value.slice(offset,m.index),template.content);offset=m.index+m[0].length;
+    }
+    if(offset){frag.append(value.slice(offset));n.replaceWith(frag)}
+  }
+}
 async function downloadPractice(){
  const list=chosen();if(!list.length)return;
- try{const html=await (await fetch("/")).text(),data={subjects:S.subjects,today:S.today,meta:S.meta,cards:list,images:Object.fromEntries(list.filter(c=>training.images[c.id]).map(c=>[c.id,training.images[c.id]]))};
- const boot='const offlineData='+JSON.stringify(data).replace(/</g,'\\u003c')+';S=offlineData;library=offlineData.cards;Object.assign(training.images,offlineData.images);tab="practice";drawPractice();';
- downloadFile("sesia-offline.html",html.replace(/\nload\(\);(?=\s*<\/script>)/,()=> '\n'+boot),'text/html')
- }catch{alert("Не вдалося завантажити офлайн-копію.")}}
+ try{
+   const res=await fetch("/");if(!res.ok)throw Error("fetch");
+   let html=await res.text();
+   const qs={},answers={},subjects=new Set(list.map(c=>c.subject));
+   for(const c of list){
+     if(Object.hasOwn(studyQuestions[c.subject]||{},c.q))(qs[c.subject]||={})[c.q]=questionText(c);
+     if(Object.hasOwn(studyAnswers[c.subject]||{},c.q))(answers[c.subject]||={})[c.q]=studyAnswers[c.subject][c.q];
+   }
+   const start=html.indexOf("const studyQuestions="),end=html.indexOf("function questionText(",start);
+   if(start<0||end<0)throw Error("version");
+   html=html.slice(0,start)+"const studyQuestions="+scriptJson(qs)+";\nconst studyAnswers="+scriptJson(answers)+";\n"+html.slice(end);
+   html=html.replace(/<(?:link|script)\b[^>]*cdn\.jsdelivr\.net[^>]*>(?:<\/script>)?/g,"");
+   const selectedMap=map=>Object.fromEntries(list.filter(c=>Object.hasOwn(map,c.id)).map(c=>[c.id,map[c.id]]));
+   const data={subjects:S.subjects.filter(s=>subjects.has(s.key)).map(({key,name,color,exam_date})=>({key,name,color,exam_date})),today:S.today,meta:{session_start:S.meta.session_start},cards:list,images:selectedMap(training.images),notes:selectedMap(training.notes),groups:selectedMap(training.groups),equations:offlineEquations(list)};
+   const boot='const offlineData='+scriptJson(data)+';S=offlineData;library=offlineData.cards;for(const k of ["images","notes","groups"]){training[k]={...offlineData[k],...training[k]}}renderMath=element=>drawOfflineMath(element,offlineData.equations);tab="practice";drawPractice();';
+   downloadFile("sesia-offline.html",html.replace(/\nload\(\);(?=\s*<\/script>)/,()=> '\n'+boot),'text/html');
+ }catch(e){alert(e.message==="math"?"Формули ще не завантажилися. Перевір з’єднання й повтори.":"Не вдалося зберегти офлайн-копію.")}
+}
 function exportResults(){downloadFile("sesia-results.json",JSON.stringify(training.queue),"application/json")}
 async function importResults(input){try{const list=JSON.parse(await input.files[0].text());if(!Array.isArray(list)||!list.every(e=>Number.isInteger(e.id)&&typeof e.ok==="boolean"&&typeof e.event==="string"&&e.event.length<100))throw Error();training.queue.push(...list);remember();await flush();alert(training.queue.length?"Результати в черзі синхронізації.":"Результати синхронізовано.")}catch{alert("Не вдалося прочитати результати.")}}
 

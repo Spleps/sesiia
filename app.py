@@ -9,7 +9,7 @@ DB = Path(os.environ.get("SP_DB", BASE / "data.db"))
 FILES = Path(os.environ.get("SP_FILES", BASE / "materials")).resolve()
 HOST = os.environ.get("SP_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SP_PORT", "8095"))
-INTERVALS = [0, 1, 2, 4, 8, 16, 32]  # інтервали повторення у днях
+INTERVALS = [0, 1, 2, 4, 8, 16, 32]  # days for Leitner boxes 0..6
 STATUSES = ("todo", "ready", "submitted")
 lock = threading.Lock()
 
@@ -23,20 +23,38 @@ CREATE TABLE IF NOT EXISTS materials(id INTEGER PRIMARY KEY, subject TEXT, title
 CREATE TABLE IF NOT EXISTS cards(id INTEGER PRIMARY KEY, subject TEXT, q TEXT, a TEXT, box INTEGER DEFAULT 0,
   due TEXT, wrong INTEGER DEFAULT 0, right INTEGER DEFAULT 0, source TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY, card INTEGER, ok INTEGER, at TEXT);
+CREATE TABLE IF NOT EXISTS deleted_keys(key TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS grades(id INTEGER PRIMARY KEY, subject TEXT, title TEXT, kind TEXT, points REAL, max REAL, date TEXT, note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS absences(id INTEGER PRIMARY KEY, subject TEXT, date TEXT, topic TEXT, status TEXT DEFAULT 'todo', file TEXT DEFAULT '', note TEXT DEFAULT '');
 """
 
 def today():
     return dt.date.today().isoformat()
 
+from contextlib import contextmanager
+
+@contextmanager
 def conn():
+    """Commit on success, roll back on error, always close (no leaked SQLite handles)."""
     c = sqlite3.connect(DB, timeout=10)
     c.row_factory = sqlite3.Row
-    return c
+    try:
+        yield c
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
 
 def rows(c, sql, *a):
     return [dict(r) for r in c.execute(sql, a)]
 
 def migrate(c):
+    cols = [r[1] for r in c.execute("PRAGMA table_info(cards)")]
+    for col in ("q_view", "a_view", "f_view", "src_a"):  # edited wording; shown while the source answer is still src_a
+        if col not in cols:
+            c.execute(f"ALTER TABLE cards ADD COLUMN {col} TEXT")
     for t in ("cards", "items"):
         cols = [r[1] for r in c.execute(f"PRAGMA table_info({t})")]
         if "key" not in cols:
@@ -46,17 +64,18 @@ def migrate(c):
         c.execute("INSERT INTO subjects(key,name,form,credits,teacher,color) VALUES('new','Вхідні завдання','',0,'перевір і перенеси в предмет або видали','#9a6bd6')")
 
 def upsert(table, recs):
-    """Додає записи за ключем та оновлює наявні зі збереженням прогресу."""
+    """Insert new records by unique key; for existing ones update content but keep progress/status."""
     added = updated = 0
     with lock, conn() as c:
         for r in recs:
             k = r.get("key")
-            if not k:
+            if not k or c.execute("SELECT 1 FROM deleted_keys WHERE key=?", (k,)).fetchone():
                 continue
             row = c.execute(f"SELECT id FROM {table} WHERE key=?", (k,)).fetchone()
             if table == "cards":
                 if row:
-                    c.execute("UPDATE cards SET subject=?, q=?, a=? WHERE id=?", (r["subject"], r["q"], r["a"], row["id"])); updated += 1
+                    c.execute("UPDATE cards SET q_view=CASE WHEN q=? THEN q_view END, subject=?, q=?, a=? WHERE id=?",
+                              (r["q"], r["subject"], r["q"], r["a"], row["id"])); updated += 1
                 else:
                     c.execute("INSERT INTO cards(subject,q,a,due,source,key) VALUES(?,?,?,?,?,?)",
                               (r["subject"], r["q"], r["a"], today(), r.get("source", ""), k)); added += 1
@@ -105,8 +124,35 @@ def state():
         stats = {r["subject"]: r for r in rows(c, """SELECT subject, COUNT(*) total,
             SUM(due<=?) due, SUM(box>=4) learned FROM cards GROUP BY subject""", t)}
         rev = rows(c, "SELECT substr(at,1,10) d, COUNT(*) n, SUM(ok) ok FROM reviews GROUP BY d ORDER BY d DESC LIMIT 14")
+        grades = rows(c, "SELECT * FROM grades ORDER BY subject, date, id")
+        absences = rows(c, "SELECT * FROM absences ORDER BY date, id")
     return {"meta": meta, "today": t, "subjects": subj, "items": items, "materials": mats,
-            "cardStats": stats, "reviews": rev}
+            "cardStats": stats, "reviews": rev, "grades": grades, "absences": absences}
+
+def theme(subject, q):
+    if " — " in q:
+        return q.split(" — ")[0]
+    if subject == "hist" and ":" in q:
+        return q.split(":")[0]
+    return "Загальні питання"
+
+def weak(days=21):
+    """Error rate per topic from recent reviews; topics with at least 2 answers, worst first."""
+    since = (dt.date.today() - dt.timedelta(days=days)).isoformat()
+    agg = {}
+    with conn() as c:
+        for r in c.execute("""SELECT cards.subject, cards.q, reviews.ok FROM reviews JOIN cards ON cards.id = reviews.card
+                              WHERE reviews.at >= ?""", (since,)):
+            k = (r["subject"], theme(r["subject"], r["q"]))
+            a = agg.setdefault(k, [0, 0]); a[0] += 1; a[1] += 1 - r["ok"]
+        cards = {}
+        for r in c.execute("SELECT subject, q, box FROM cards"):
+            k = (r["subject"], theme(r["subject"], r["q"]))
+            v = cards.setdefault(k, [0, 0]); v[0] += 1; v[1] += r["box"] >= 4
+    out = [{"subject": s, "theme": t, "answers": n, "wrong": w, "rate": round(w / n, 2),
+            "cards": cards.get((s, t), [0, 0])[0], "learned": cards.get((s, t), [0, 0])[1]}
+           for (s, t), (n, w) in agg.items() if n >= 2 and w]
+    return sorted(out, key=lambda x: (-x["rate"], -x["wrong"]))
 
 def due_cards(subject, limit):
     with conn() as c:
@@ -116,13 +162,13 @@ def due_cards(subject, limit):
 
 def review(card_id, ok, event=None):
     with lock, conn() as c:
+        r = c.execute("SELECT box FROM cards WHERE id=?", (card_id,)).fetchone()
+        if not r:
+            return None
         if event:
             c.execute("CREATE TABLE IF NOT EXISTS review_events(event TEXT PRIMARY KEY)")
             if not c.execute("INSERT OR IGNORE INTO review_events VALUES(?)", (event,)).rowcount:
                 return {"box": 0, "duplicate": True}
-        r = c.execute("SELECT box FROM cards WHERE id=?", (card_id,)).fetchone()
-        if not r:
-            return None
         box = min(r["box"] + 1, len(INTERVALS) - 1) if ok else 0
         due = (dt.date.today() + dt.timedelta(days=INTERVALS[box] if ok else 0)).isoformat()
         c.execute("UPDATE cards SET box=?, due=?, right=right+?, wrong=wrong+? WHERE id=?",
@@ -133,7 +179,10 @@ def review(card_id, ok, event=None):
 EDIT = {"items": ("subject", "title", "kind", "status", "file", "note", "due"),
         "subjects": ("exam_date", "notes", "teacher"),
         "materials": ("subject", "title", "url"),
-        "cards": ("subject", "q", "a")}
+        "cards": ("subject", "q", "a"),
+        "grades": ("subject", "title", "kind", "points", "max", "date", "note"),
+        "absences": ("subject", "date", "topic", "status", "file", "note")}
+LISTS = ("items", "materials", "cards", "grades", "absences")
 
 class H(BaseHTTPRequestHandler):
     server_version = "SessionPrep/1"
@@ -152,15 +201,42 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _safe(self, fn):
+        try:
+            fn()
+        except (ValueError, KeyError, TypeError, IndexError) as e:  # bad JSON, id, limit, missing field
+            self.send(400, {"error": f"хибний запит: {type(e).__name__}"})
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"ERROR {self.command} {self.path}: {e!r}\n")
+            self.send(500, {"error": "помилка сервера"})
+
     def body(self):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}") if n else {}
 
     def do_GET(self):
+        self._safe(self._get)
+
+    def _get(self):
         u = urllib.parse.urlparse(self.path)
         p, qs = u.path, urllib.parse.parse_qs(u.query)
         if p in ("/", "/index.html"):
             return self.send(200, (BASE / "static/index.html").read_bytes(), "text/html; charset=utf-8")
+        if p.startswith("/static/"):
+            f = (BASE / "static" / Path(p).name)
+            if f.suffix not in (".js", ".css", ".json") or not f.is_file():
+                return self.send(404, {"error": "не знайдено"})
+            return self.send(200, f.read_bytes(), {".js": "text/javascript", ".css": "text/css", ".json": "application/json"}[f.suffix] + "; charset=utf-8")
+        if p == "/api/tickets":
+            return self.send(200, (BASE / "tickets.json").read_bytes())
+        if p == "/api/weak":
+            return self.send(200, weak(int(qs.get("days", ["21"])[0])))
         if p == "/api/state":
             return self.send(200, state())
         if p == "/api/cards/due":
@@ -183,6 +259,9 @@ class H(BaseHTTPRequestHandler):
         self.send(404, {"error": "не знайдено"})
 
     def do_POST(self):
+        self._safe(self._post)
+
+    def _post(self):
         p = urllib.parse.urlparse(self.path).path
         b = self.body()
         if p.startswith("/api/cards/") and p.endswith("/review"):
@@ -207,7 +286,7 @@ class H(BaseHTTPRequestHandler):
                             n += 1
             return self.send(200, {"added": n})
         table = p.strip("/").split("/")[-1]
-        if table in ("items", "materials", "cards"):
+        if table in LISTS:
             cols = [k for k in EDIT[table] if k in b]
             if table == "items":
                 b.setdefault("status", "todo"); cols = list(dict.fromkeys(cols + ["status"]))
@@ -219,6 +298,9 @@ class H(BaseHTTPRequestHandler):
         self.send(404, {"error": "не знайдено"})
 
     def do_PATCH(self):
+        self._safe(self._patch)
+
+    def _patch(self):
         parts = urllib.parse.urlparse(self.path).path.strip("/").split("/")
         if len(parts) == 3 and parts[1] in EDIT:
             b = self.body()
@@ -228,6 +310,8 @@ class H(BaseHTTPRequestHandler):
             if not cols:
                 return self.send(400, {"error": "немає змін"})
             extra = ", updated=?" if parts[1] == "items" else ""
+            if parts[1] == "cards":  # a manual edit replaces the stored nicer wording
+                extra = (", q_view=NULL" if "q" in b else "") + (", a_view=NULL, f_view=NULL" if "a" in b else "")
             vals = [b[k] for k in cols] + ([today()] if extra else []) + [int(parts[2])]
             with lock, conn() as c:
                 c.execute(f"UPDATE {parts[1]} SET {', '.join(k + '=?' for k in cols)}{extra} WHERE id=?", vals)
@@ -235,9 +319,14 @@ class H(BaseHTTPRequestHandler):
         self.send(404, {"error": "не знайдено"})
 
     def do_DELETE(self):
+        self._safe(self._delete)
+
+    def _delete(self):
         parts = urllib.parse.urlparse(self.path).path.strip("/").split("/")
-        if len(parts) == 3 and parts[1] in ("items", "materials", "cards"):
+        if len(parts) == 3 and parts[1] in LISTS:
             with lock, conn() as c:
+                if parts[1] in ("items", "cards"):
+                    c.execute(f"INSERT OR IGNORE INTO deleted_keys SELECT key FROM {parts[1]} WHERE id=? AND key IS NOT NULL", (int(parts[2]),))
                 c.execute(f"DELETE FROM {parts[1]} WHERE id=?", (int(parts[2]),))
             return self.send(200, {"ok": True})
         self.send(404, {"error": "не знайдено"})
