@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.db*
+*.sqlite*
+.env*
+*.pem
+*.key
+*.session*
+materials/
+notion/
+sync_state.json
+*.log
+.venv/

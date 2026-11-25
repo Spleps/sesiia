@@ -1,0 +1,34 @@
+{
+  "session": {
+    "start": "2027-06-01",
+    "end": "2027-06-21"
+  },
+  "subjects": [
+    {
+      "key": "math",
+      "name": "Математика",
+      "form": "Е",
+      "credits": 3,
+      "teacher": "",
+      "color": "#7465ba"
+    },
+    {
+      "key": "phys",
+      "name": "Фізика",
+      "form": "Е",
+      "credits": 3,
+      "teacher": "",
+      "color": "#448977"
+    },
+    {
+      "key": "info",
+      "name": "Інформатика",
+      "form": "Е",
+      "credits": 3,
+      "teacher": "",
+      "color": "#49789f"
+    }
+  ],
+  "materials": [],
+  "items": []
+}
